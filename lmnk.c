@@ -120,21 +120,25 @@ struct lmnk_event_packet {
 // ---------------------------------------------------------
 // Hardware Auto-Detection
 // ---------------------------------------------------------
-void choose_device(const char *prompt_type, char *out_path) {
-    printf("\n--- Available Input Devices ---\n");
+void choose_device(const char *prompt_type, int target_ev_type, char *out_path) {
+    printf("\n[AUTO-DETECT] Please WIGGLE your %s (or mash a few keys) right now...\n", prompt_type);
+    
+    int fds[64];
     char paths[64][64];
+    char names[64][256];
+    struct pollfd pfds[64];
     int count = 0;
     
     for (int i = 0; i < 64; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/dev/input/event%d", i);
-        int fd = open(path, O_RDONLY);
+        int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd >= 0) {
-            char name[256] = "Unknown";
-            ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-            close(fd);
-            printf("[%d] %s (%s)\n", count, name, path);
+            fds[count] = fd;
             strcpy(paths[count], path);
+            ioctl(fd, EVIOCGNAME(sizeof(names[count])), names[count]);
+            pfds[count].fd = fd;
+            pfds[count].events = POLLIN;
             count++;
         }
     }
@@ -144,6 +148,44 @@ void choose_device(const char *prompt_type, char *out_path) {
         printf("Physical %s device path: ", prompt_type);
         scanf("%63s", out_path);
         return;
+    }
+
+    long long start_time = time(NULL);
+    int detected_idx = -1;
+    
+    // Listen for up to 5 seconds
+    while (time(NULL) - start_time < 5) {
+        if (poll(pfds, count, 100) > 0) {
+            for (int i = 0; i < count; i++) {
+                if (pfds[i].revents & POLLIN) {
+                    struct input_event ev;
+                    while (read(fds[i], &ev, sizeof(ev)) > 0) {
+                        if (ev.type == target_ev_type && ev.value != 0) {
+                            detected_idx = i;
+                            break;
+                        }
+                    }
+                }
+                if (detected_idx != -1) break;
+            }
+        }
+        if (detected_idx != -1) break;
+    }
+
+    if (detected_idx != -1) {
+        strcpy(out_path, paths[detected_idx]);
+        printf("[+] Auto-detected %s: %s (%s)\n", prompt_type, names[detected_idx], out_path);
+        for (int j = 0; j < count; j++) close(fds[j]);
+        return;
+    }
+
+    for (int j = 0; j < count; j++) close(fds[j]);
+    
+    // Fall back to manual menu
+    printf("[-] Auto-detect timed out.\n");
+    printf("\n--- Available Input Devices ---\n");
+    for (int i = 0; i < count; i++) {
+        printf("[%d] %s (%s)\n", i, names[i], paths[i]);
     }
     
     printf("\nEnter the number for your physical %s: ", prompt_type);
@@ -235,11 +277,11 @@ void interactive_setup(struct lmnk_config *cfg) {
 
     if (choice == 's' || choice == 'S') {
         strcpy(cfg->mode, "server");
-        choose_device("MOUSE", cfg->dev_mouse);
-        choose_device("KEYBOARD", cfg->dev_kbd);
+        choose_device("MOUSE", EV_REL, cfg->dev_mouse);
+        choose_device("KEYBOARD", EV_KEY, cfg->dev_kbd);
         
-        printf("\nConnection password: ");
-        scanf("%31s", cfg->password);
+        char *pass = getpass("\nConnection password: ");
+        if (pass) strncpy(cfg->password, pass, 31);
         printf("Side of secondary screen (left or right): ");
         scanf("%15s", cfg->side);
         
@@ -255,8 +297,8 @@ void interactive_setup(struct lmnk_config *cfg) {
         }
     } else {
         strcpy(cfg->mode, "client");
-        printf("Connection password: ");
-        scanf("%31s", cfg->password);
+        char *pass = getpass("Connection password: ");
+        if (pass) strncpy(cfg->password, pass, 31);
         
         if (has_res) {
             printf("[+] Auto-detected screen resolution: %dx%d\n", auto_w, auto_h);
