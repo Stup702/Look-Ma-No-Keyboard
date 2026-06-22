@@ -241,6 +241,7 @@ struct lmnk_config {
     char dev_mouse[64];
     char dev_kbd[64];
     char side[16];
+    char server_ip[64];
     int width, height;
 };
 
@@ -251,12 +252,13 @@ int load_config(struct lmnk_config *cfg) {
     if (!f) return 0;
     
     char line[256];
-    while(fgets(line, sizeof(line), f)) {
+    while (fgets(line, sizeof(line), f)) {
         sscanf(line, "mode=%15s", cfg->mode);
         sscanf(line, "password=%31s", cfg->password);
         sscanf(line, "dev_mouse=%63s", cfg->dev_mouse);
         sscanf(line, "dev_kbd=%63s", cfg->dev_kbd);
         sscanf(line, "side=%15s", cfg->side);
+        sscanf(line, "server_ip=%63s", cfg->server_ip);
         sscanf(line, "width=%d", &cfg->width);
         sscanf(line, "height=%d", &cfg->height);
     }
@@ -300,6 +302,9 @@ void interactive_setup(struct lmnk_config *cfg) {
         char *pass = getpass("Connection password: ");
         if (pass) strncpy(cfg->password, pass, 31);
         
+        printf("Server IP Address (type 'auto' for auto-discovery): ");
+        scanf("%63s", cfg->server_ip);
+        
         if (has_res) {
             printf("[+] Auto-detected screen resolution: %dx%d\n", auto_w, auto_h);
             cfg->width = auto_w;
@@ -319,6 +324,8 @@ void interactive_setup(struct lmnk_config *cfg) {
         fprintf(f, "mode=%s\npassword=%s\nwidth=%d\nheight=%d\n", cfg->mode, cfg->password, cfg->width, cfg->height);
         if (strcmp(cfg->mode, "server") == 0) {
             fprintf(f, "dev_mouse=%s\ndev_kbd=%s\nside=%s\n", cfg->dev_mouse, cfg->dev_kbd, cfg->side);
+        } else {
+            fprintf(f, "server_ip=%s\n", cfg->server_ip);
         }
         fclose(f);
         printf("\n[+] Configuration saved to %s\n\n", path);
@@ -518,10 +525,16 @@ void run_client(struct lmnk_config *cfg) {
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
-    serv_addr.sin_addr.s_addr = INADDR_BROADCAST; 
+    
+    if (strlen(cfg->server_ip) > 0 && strcmp(cfg->server_ip, "auto") != 0) {
+        serv_addr.sin_addr.s_addr = inet_addr(cfg->server_ip);
+        printf("[CLIENT] Using direct Server IP: %s\n", cfg->server_ip);
+    } else {
+        serv_addr.sin_addr.s_addr = INADDR_BROADCAST; 
+        printf("[CLIENT] Broadcasting UDP discovery...\n");
+    }
 
-    // Connect to server (Broadcast loop)
-    printf("[CLIENT] Broadcasting UDP discovery...\n");
+    // Connect to server
     int connected = 0;
     socklen_t s_len = sizeof(serv_addr);
     struct lmnk_handshake hs;
