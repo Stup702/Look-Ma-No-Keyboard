@@ -359,36 +359,44 @@ void run_server(struct lmnk_config *cfg) {
     if (bind(tcp_server, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) { perror("TCP Bind"); exit(1); }
     listen(tcp_server, 1);
 
-    printf("[SERVER] Waiting for client UDP broadcast...\n");
+    printf("[SERVER] Waiting for client UDP broadcast or TCP connection...\n");
     int c_width = 0, c_height = 0;
-    while (1) {
-        struct lmnk_handshake hs;
-        if (recvfrom(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&client_addr, &client_len) > 0) {
-            crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
-            if (strncmp(hs.payload.magic, "LMNKAUTH", 8) == 0) {
-                c_width = hs.payload.width;
-                c_height = hs.payload.height;
-                printf("[SERVER] Client authenticated! IP: %s (Res: %dx%d)\n", inet_ntoa(client_addr.sin_addr), c_width, c_height);
-                break;
+    int tcp_client = -1;
+    
+    struct pollfd hs_fds[2] = { {udp_sock, POLLIN, 0}, {tcp_server, POLLIN, 0} };
+    
+    while (tcp_client < 0) {
+        if (poll(hs_fds, 2, -1) > 0) {
+            if (hs_fds[0].revents & POLLIN) {
+                struct lmnk_handshake hs;
+                if (recvfrom(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&client_addr, &client_len) > 0) {
+                    crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
+                    if (strncmp(hs.payload.magic, "LMNKAUTH", 8) == 0) {
+                        c_width = hs.payload.width;
+                        c_height = hs.payload.height;
+                        
+                        // Send UDP Acknowledgement
+                        struct lmnk_handshake reply;
+                        reply.iv = get_random_iv();
+                        strncpy(reply.payload.magic, "LMNKOKAY", 8);
+                        reply.payload.width = cfg->width;
+                        reply.payload.height = cfg->height;
+                        crypt_buffer((uint8_t*)&reply.payload, sizeof(reply.payload), cfg->password, reply.iv);
+                        sendto(udp_sock, &reply, sizeof(reply), 0, (struct sockaddr*)&client_addr, client_len);
+                        printf("[SERVER] Client discovered from %s. Sent Ack...\n", inet_ntoa(client_addr.sin_addr));
+                    }
+                }
+            }
+            if (hs_fds[1].revents & POLLIN) {
+                tcp_client = accept(tcp_server, NULL, NULL);
+                if (tcp_client >= 0) {
+                    int nodelay = 1;
+                    setsockopt(tcp_client, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                    printf("[SERVER] TCP connected! Tracking mouse.\n");
+                }
             }
         }
     }
-
-    // Send UDP Acknowledgement
-    struct lmnk_handshake reply;
-    reply.iv = get_random_iv();
-    strncpy(reply.payload.magic, "LMNKOKAY", 8);
-    reply.payload.width = cfg->width;
-    reply.payload.height = cfg->height;
-    crypt_buffer((uint8_t*)&reply.payload, sizeof(reply.payload), cfg->password, reply.iv);
-    sendto(udp_sock, &reply, sizeof(reply), 0, (struct sockaddr*)&client_addr, client_len);
-
-    printf("[SERVER] Waiting for TCP connection...\n");
-    int tcp_client = accept(tcp_server, NULL, NULL);
-    if (tcp_client < 0) { perror("TCP Accept"); exit(1); }
-    int nodelay = 1;
-    setsockopt(tcp_client, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-    printf("[SERVER] TCP connected! Tracking mouse.\n");
 
     int side = (strcmp(cfg->side, "left") == 0) ? SIDE_LEFT : SIDE_RIGHT;
     int current_x = cfg->width / 2;
@@ -512,25 +520,30 @@ void run_client(struct lmnk_config *cfg) {
     serv_addr.sin_port = htons(PORT);
     serv_addr.sin_addr.s_addr = INADDR_BROADCAST; 
 
-    // Send UDP Discovery
-    struct lmnk_handshake hs;
-    hs.iv = get_random_iv();
-    strncpy(hs.payload.magic, "LMNKAUTH", 8);
-    hs.payload.width = cfg->width;
-    hs.payload.height = cfg->height;
-    crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
-    
+    // Connect to server (Broadcast loop)
     printf("[CLIENT] Broadcasting UDP discovery...\n");
-    sendto(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
-
-    // Wait for Server Ack to get Server IP
+    int connected = 0;
     socklen_t s_len = sizeof(serv_addr);
-    while (1) {
-        if (recvfrom(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&serv_addr, &s_len) > 0) {
-            crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
-            if (strncmp(hs.payload.magic, "LMNKOKAY", 8) == 0) {
-                printf("[CLIENT] Server found at %s! (Res: %dx%d)\n", inet_ntoa(serv_addr.sin_addr), hs.payload.width, hs.payload.height);
-                break;
+    struct lmnk_handshake hs;
+
+    while (!connected) {
+        // Send UDP Discovery
+        hs.iv = get_random_iv();
+        strncpy(hs.payload.magic, "LMNKAUTH", 8);
+        hs.payload.width = cfg->width;
+        hs.payload.height = cfg->height;
+        crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
+        sendto(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+
+        // Wait for Server Ack to get Server IP with a 1-second timeout
+        struct pollfd pfd = { udp_sock, POLLIN, 0 };
+        if (poll(&pfd, 1, 1000) > 0) {
+            if (recvfrom(udp_sock, &hs, sizeof(hs), 0, (struct sockaddr*)&serv_addr, &s_len) > 0) {
+                crypt_buffer((uint8_t*)&hs.payload, sizeof(hs.payload), cfg->password, hs.iv);
+                if (strncmp(hs.payload.magic, "LMNKOKAY", 8) == 0) {
+                    printf("[CLIENT] Server found at %s! (Res: %dx%d)\n", inet_ntoa(serv_addr.sin_addr), hs.payload.width, hs.payload.height);
+                    connected = 1;
+                }
             }
         }
     }
