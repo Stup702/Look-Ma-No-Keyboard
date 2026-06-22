@@ -29,8 +29,15 @@ To avoid having to run LMNK with `sudo` every time, run the included permission 
 ```
 **CRITICAL:** You must reboot your computer (or log out and back in) for the group permission changes to take effect!
 
-### 3. First-Time Configuration
-Run the binary! If it's your first time, it will automatically ask you the setup questions:
+### 3. Create the Desktop App Shortcut (Optional but Recommended)
+To run LMNK in its own dedicated, clean terminal window so it doesn't get lost in your terminal tabs, run the app installer:
+```bash
+./install_app.sh
+```
+This will add an "LMNK Control Center" app to your system menu. 
+
+### 4. First-Time Configuration
+Run the binary (or click your new app shortcut)! If it's your first time, it will automatically ask you the setup questions:
 ```bash
 ./lmnk
 ```
