@@ -32,6 +32,39 @@ void handle_sigint(int sig) {
 }
 
 // ---------------------------------------------------------
+// Terminal UI & Commands
+// ---------------------------------------------------------
+struct lmnk_config; // Forward declaration
+
+void print_header(const char *mode, int width, int height) {
+    printf("\n==========================================\n");
+    printf("         LMNK CONTROL CENTER\n");
+    printf("==========================================\n");
+    printf(" Mode: %s\n", mode);
+    printf(" Resolution: %dx%d\n", width, height);
+    printf("------------------------------------------\n");
+    printf(" Type 'config' + Enter to reset settings\n");
+    printf(" Type 'quit'   + Enter to close LMNK\n");
+    printf("==========================================\n\n");
+}
+
+void handle_stdin_commands() {
+    char buf[64];
+    if (fgets(buf, sizeof(buf), stdin)) {
+        if (strncmp(buf, "config", 6) == 0) {
+            char path[256];
+            snprintf(path, sizeof(path), "%s/.lmnkrc", getenv("HOME"));
+            remove(path);
+            printf("\n[!] Configuration reset! Please restart LMNK to configure again.\n");
+            handle_sigint(0);
+        }
+        if (strncmp(buf, "quit", 4) == 0 || strncmp(buf, "q", 1) == 0) {
+            handle_sigint(0);
+        }
+    }
+}
+
+// ---------------------------------------------------------
 // Stateless Cryptography & Network Structures
 // ---------------------------------------------------------
 uint32_t generate_seed(const char *password, uint32_t iv) {
@@ -193,7 +226,7 @@ void interactive_setup(struct lmnk_config *cfg) {
     printf("==========================================\n");
     printf("   LMNK First-Time Interactive Setup      \n");
     printf("==========================================\n");
-    printf("Is this computer the (s)erver (Main PC) or (c)lient (Secondary Laptop)? [s/c]: ");
+    printf("Is this computer the (s)erver or (c)lient ? [s/c]: ");
     char choice;
     scanf(" %c", &choice);
     
@@ -320,10 +353,11 @@ void run_server(struct lmnk_config *cfg) {
     int current_y = cfg->height / 2;
     int grabbed = 0;
 
-    struct pollfd fds[2] = { {m_fd, POLLIN, 0}, {k_fd, POLLIN, 0} };
+    print_header(cfg->mode, cfg->width, cfg->height);
+    struct pollfd fds[3] = { {m_fd, POLLIN, 0}, {k_fd, POLLIN, 0}, {STDIN_FILENO, POLLIN, 0} };
 
     while (1) {
-        if (poll(fds, 2, -1) <= 0) continue;
+        if (poll(fds, 3, -1) <= 0) continue;
 
         if (fds[0].revents & POLLIN) { // Mouse Event
             struct input_event ev;
@@ -386,6 +420,10 @@ void run_server(struct lmnk_config *cfg) {
                     send(tcp_client, &pkt, sizeof(pkt), 0);
                 }
             }
+        }
+
+        if (fds[2].revents & POLLIN) {
+            handle_stdin_commands();
         }
     }
 }
@@ -462,11 +500,12 @@ void run_client(struct lmnk_config *cfg) {
     setsockopt(tcp_sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
     printf("[CLIENT] Connected successfully. Awaiting inputs...\n");
 
-    struct pollfd fds[2] = { {udp_sock, POLLIN, 0}, {tcp_sock, POLLIN, 0} };
+    print_header(cfg->mode, cfg->width, cfg->height);
+    struct pollfd fds[3] = { {udp_sock, POLLIN, 0}, {tcp_sock, POLLIN, 0}, {STDIN_FILENO, POLLIN, 0} };
     struct lmnk_event_packet pkt;
 
     while (1) {
-        if (poll(fds, 2, -1) <= 0) continue;
+        if (poll(fds, 3, -1) <= 0) continue;
 
         if (fds[0].revents & POLLIN) { // UDP Mouse Event
             if (recv(udp_sock, &pkt, sizeof(pkt), 0) > 0) {
@@ -479,6 +518,10 @@ void run_client(struct lmnk_config *cfg) {
                 crypt_buffer((uint8_t*)&pkt.ev, sizeof(pkt.ev), cfg->password, pkt.iv);
                 if (write(uinp_fd, &pkt.ev, sizeof(pkt.ev)) < 0) {}
             }
+        }
+
+        if (fds[2].revents & POLLIN) {
+            handle_stdin_commands();
         }
     }
 }
