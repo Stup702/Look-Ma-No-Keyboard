@@ -500,8 +500,6 @@ void run_server(struct lmnk_config *cfg) {
     int tp_fd = -1;
     struct tp_caps tp_info;
     memset(&tp_info, 0, sizeof(tp_info));
-    int tp_is_same_hw = 0;  // True if mouse and touchpad are the same physical chip
-
     if (cfg->dev_tp[0]) {
 
         tp_fd = open(cfg->dev_tp, O_RDONLY | O_NONBLOCK);
@@ -513,15 +511,19 @@ void run_server(struct lmnk_config *cfg) {
             // (e.g. laptop touchpad produces both event4=Mouse and event5=Touchpad)
             // If so, we only forward raw touchpad data and skip the synthetic mouse events
             // to prevent double cursor movement on the client.
-            tp_is_same_hw = is_same_hardware(m_fd, tp_fd);
+            int same_hw = is_same_hardware(m_fd, tp_fd);
             
             char tp_name[256] = {0};
             ioctl(tp_fd, EVIOCGNAME(sizeof(tp_name)), tp_name);
             printf("[SERVER] Touchpad: %s (%d axes, %d slots)\n", tp_name, tp_info.num_axes, tp_info.num_mt_slots);
-            if (tp_is_same_hw)
-                printf("[SERVER] Mouse + Touchpad are same hardware. Using raw touchpad mode.\n");
-            else
+            if (same_hw) {
+                printf("[SERVER] Mouse + Touchpad are same hardware. Deduplicating FD.\n");
+                close(tp_fd);
+                tp_fd = -1;
+                global_tp_fd = -1;
+            } else {
                 printf("[SERVER] Mouse + Touchpad are separate hardware. Forwarding both.\n");
+            }
         } else {
             printf("[SERVER] Warning: Could not open touchpad %s. Continuing without it.\n", cfg->dev_tp);
         }
@@ -595,7 +597,7 @@ restart_server:;
     tp_pkt.caps = tp_info;
     crypt_buffer((uint8_t*)&tp_pkt.caps, sizeof(tp_pkt.caps), cfg->password, tp_pkt.iv);
     send(tcp_client, &tp_pkt, sizeof(tp_pkt), 0);
-    printf("[SERVER] Sent touchpad caps (has_tp=%d, same_hw=%d)\n", tp_info.has_touchpad, tp_is_same_hw);
+    printf("[SERVER] Sent touchpad caps (has_tp=%d)\n", tp_info.has_touchpad);
 
     int side = (strcmp(cfg->side, "left") == 0) ? SIDE_LEFT : SIDE_RIGHT;
     int current_x = cfg->width / 2;
@@ -662,13 +664,15 @@ void force_client_cursor(int udp_sock, struct sockaddr_in *client_addr, socklen_
                 }
 
 
-                // Forward mouse events only if grabbed AND (no touchpad OR different hardware)
-                // When touchpad is same hardware, skip forwarding mouse events to avoid
-                // double cursor movement (client's libinput generates its own from raw touchpad data)
-                if (grabbed && !(tp_fd >= 0 && tp_is_same_hw)) {
+                // Forward mouse events
+                if (grabbed) {
                     struct lmnk_event_packet pkt;
                     pkt.iv = get_random_iv();
-                    pkt.data.source = SRC_MOUSE;
+                    if (ev.type == EV_ABS || (ev.type == EV_KEY && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER))) {
+                        pkt.data.source = SRC_TOUCHPAD;
+                    } else {
+                        pkt.data.source = SRC_MOUSE;
+                    }
                     memset(pkt.data._pad, 0, sizeof(pkt.data._pad));
                     pkt.data.ev = ev;
                     crypt_buffer((uint8_t*)&pkt.data, sizeof(pkt.data), cfg->password, pkt.iv);
