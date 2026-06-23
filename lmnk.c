@@ -498,6 +498,7 @@ void run_server(struct lmnk_config *cfg) {
 
     // Open touchpad if configured
     int tp_fd = -1;
+    int m_fd_is_touchpad = 0;
     struct tp_caps tp_info;
     memset(&tp_info, 0, sizeof(tp_info));
     if (cfg->dev_tp[0]) {
@@ -521,6 +522,7 @@ void run_server(struct lmnk_config *cfg) {
                 close(tp_fd);
                 tp_fd = -1;
                 global_tp_fd = -1;
+                m_fd_is_touchpad = 1;
             } else {
                 printf("[SERVER] Mouse + Touchpad are separate hardware. Forwarding both.\n");
             }
@@ -668,7 +670,7 @@ void force_client_cursor(int udp_sock, struct sockaddr_in *client_addr, socklen_
                 if (grabbed) {
                     struct lmnk_event_packet pkt;
                     pkt.iv = get_random_iv();
-                    if (ev.type == EV_ABS || (ev.type == EV_KEY && (ev.code == BTN_TOUCH || ev.code == BTN_TOOL_FINGER))) {
+                    if (m_fd_is_touchpad) {
                         pkt.data.source = SRC_TOUCHPAD;
                     } else {
                         pkt.data.source = SRC_MOUSE;
@@ -844,6 +846,11 @@ int setup_uinput_touchpad(struct tp_caps *caps) {
     }
 
     ioctl(fd, UI_SET_EVBIT, EV_ABS);
+    ioctl(fd, UI_SET_EVBIT, EV_REL);
+    ioctl(fd, UI_SET_RELBIT, REL_X);
+    ioctl(fd, UI_SET_RELBIT, REL_Y);
+    ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
+    ioctl(fd, UI_SET_RELBIT, REL_HWHEEL);
     ioctl(fd, UI_SET_EVBIT, EV_SYN);
     ioctl(fd, UI_SET_EVBIT, EV_MSC);
     ioctl(fd, UI_SET_MSCBIT, MSC_TIMESTAMP);
