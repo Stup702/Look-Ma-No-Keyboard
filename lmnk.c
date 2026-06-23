@@ -665,58 +665,10 @@ void force_client_cursor(int udp_sock, struct sockaddr_in *client_addr, socklen_
             while (read(m_fd, &ev, sizeof(ev)) > 0) {
                 if (ev.type == EV_REL) {
                     if (ev.code == REL_X) current_x += ev.value;
-                    if (ev.code == REL_Y) current_y += ev.value;
-
-                    // Boundary checking and dynamic scaling
-                    if (!grabbed) {
-                        if (side == SIDE_RIGHT) {
-                            if (current_x >= cfg->width + 400) {
-                                grabbed = 1;
-                                ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
-                                current_y = (current_y * c_height) / cfg->height;
-                                force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
-                                printf("[→ GRABBED] Input forwarding to client.\n");
-                                current_x = cfg->width;
-                            } else if (current_x < 0) current_x = 0;
-                        } else if (side == SIDE_LEFT) {
-                            if (current_x <= -400) {
-                                grabbed = 1;
-                                ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
-                                current_y = (current_y * c_height) / cfg->height;
-                                force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
-                                printf("[→ GRABBED] Input forwarding to client.\n");
-                                current_x = 0;
-                            } else if (current_x > cfg->width) current_x = cfg->width;
-                        }
-                        if (current_y < 0) current_y = 0;
-                        if (current_y > cfg->height) current_y = cfg->height;
-                    } else {
-                        if (side == SIDE_RIGHT) {
-                            if (current_x <= cfg->width - 400) {
-                                grabbed = 0;
-                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
-                                current_y = (current_y * cfg->height) / c_height;
-                                printf("[← RELEASED] Input returned to main PC.\n");
-                                current_x = cfg->width;
-                            } else if (current_x > cfg->width + c_width) current_x = cfg->width + c_width;
-                        } else if (side == SIDE_LEFT) {
-                            if (current_x >= 400) {
-                                grabbed = 0;
-                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
-                                current_y = (current_y * cfg->height) / c_height;
-                                printf("[← RELEASED] Input returned to main PC.\n");
-                                current_x = 0;
-                            } else if (current_x < -c_width) current_x = -c_width;
-                        }
-                        if (current_y < 0) current_y = 0;
-                        if (current_y > c_height) current_y = c_height;
-                    }
+                    else if (ev.code == REL_Y) current_y += ev.value;
                 }
-                
+
+
                 // Forward mouse events only if grabbed AND (no touchpad OR different hardware)
                 // When touchpad is same hardware, skip forwarding mouse events to avoid
                 // double cursor movement (client's libinput generates its own from raw touchpad data)
@@ -734,7 +686,53 @@ void force_client_cursor(int udp_sock, struct sockaddr_in *client_addr, socklen_
 
         if (fds[1].revents & POLLIN) { // Keyboard Event
             struct input_event ev;
+            static int ctrl_pressed = 0;
+            static int alt_pressed = 0;
+
             while (read(k_fd, &ev, sizeof(ev)) > 0) {
+                if (ev.type == EV_KEY) {
+                    if (ev.code == KEY_LEFTCTRL || ev.code == KEY_RIGHTCTRL) ctrl_pressed = ev.value;
+                    if (ev.code == KEY_LEFTALT || ev.code == KEY_RIGHTALT) alt_pressed = ev.value;
+
+                    // Manual Switch via Ctrl + Alt + Left/Right
+                    if (ev.value == 1 && ctrl_pressed && alt_pressed) {
+                        if (current_y < 0) current_y = 0;
+                        if (current_y > cfg->height) current_y = cfg->height;
+
+                        if (ev.code == KEY_LEFT) {
+                            if (side == SIDE_LEFT && !grabbed) { // Switch to Client (Left)
+                                grabbed = 1;
+                                ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
+                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
+                                force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
+                                printf("[→ GRABBED] Switched to Client via Hotkey.\n");
+                                current_x = 0;
+                            } else if (side == SIDE_RIGHT && grabbed) { // Return to Server (Left)
+                                grabbed = 0;
+                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
+                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
+                                printf("[← RELEASED] Switched to Server via Hotkey.\n");
+                                current_x = cfg->width;
+                            }
+                        } else if (ev.code == KEY_RIGHT) {
+                            if (side == SIDE_RIGHT && !grabbed) { // Switch to Client (Right)
+                                grabbed = 1;
+                                ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
+                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
+                                force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
+                                printf("[→ GRABBED] Switched to Client via Hotkey.\n");
+                                current_x = cfg->width;
+                            } else if (side == SIDE_LEFT && grabbed) { // Return to Server (Right)
+                                grabbed = 0;
+                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
+                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
+                                printf("[← RELEASED] Switched to Server via Hotkey.\n");
+                                current_x = 0;
+                            }
+                        }
+                    }
+                }
+
                 if (grabbed) {
                     struct lmnk_event_packet pkt;
                     pkt.iv = get_random_iv();
@@ -784,52 +782,7 @@ void force_client_cursor(int udp_sock, struct sockaddr_in *client_addr, socklen_
                     }
                 }
 
-                if (ev.type == EV_SYN) { // Evaluate boundaries after ABS updates
-                    if (!grabbed) {
-                        if (current_y < 0) current_y = 0;
-                        if (current_y > cfg->height) current_y = cfg->height;
 
-                        if (side == SIDE_RIGHT && current_x >= cfg->width) {
-                            grabbed = 1;
-                            ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
-                            if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
-                            current_y = (current_y * c_height) / cfg->height;
-                            force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
-                            printf("[→ GRABBED] Input forwarding to client.\n");
-                        } else if (side == SIDE_LEFT && current_x <= 0) {
-                            grabbed = 1;
-                            ioctl(m_fd, EVIOCGRAB, 1); ioctl(k_fd, EVIOCGRAB, 1);
-                            if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 1);
-                            current_y = (current_y * c_height) / cfg->height;
-                            force_client_cursor(udp_sock, &client_addr, client_len, cfg->password, side, current_y);
-                            printf("[→ GRABBED] Input forwarding to client.\n");
-                        } else {
-                            if (current_x < 0) current_x = 0;
-                            if (current_x > cfg->width) current_x = cfg->width;
-                        }
-                    } else {
-                        if (current_y < 0) current_y = 0;
-                        if (current_y > c_height) current_y = c_height;
-
-                        if (side == SIDE_RIGHT) {
-                            if (current_x < cfg->width) {
-                                grabbed = 0;
-                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
-                                current_y = (current_y * cfg->height) / c_height;
-                                printf("[← RELEASED] Input returned to main PC.\n");
-                            } else if (current_x > cfg->width + c_width) current_x = cfg->width + c_width;
-                        } else {
-                            if (current_x > 0) {
-                                grabbed = 0;
-                                ioctl(m_fd, EVIOCGRAB, 0); ioctl(k_fd, EVIOCGRAB, 0);
-                                if (tp_fd >= 0) ioctl(tp_fd, EVIOCGRAB, 0);
-                                current_y = (current_y * cfg->height) / c_height;
-                                printf("[← RELEASED] Input returned to main PC.\n");
-                            } else if (current_x < -c_width) current_x = -c_width;
-                        }
-                    }
-                }
 
                 if (grabbed) {
                     struct lmnk_event_packet pkt;
