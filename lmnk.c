@@ -297,7 +297,7 @@ void choose_device(const char *prompt_type, int target_ev_type, char *out_path) 
                 if (pfds[i].revents & POLLIN) {
                     struct input_event ev;
                     while (read(fds[i], &ev, sizeof(ev)) > 0) {
-                        if (ev.type == target_ev_type && ev.value != 0) {
+                        if ((ev.type == target_ev_type || (target_ev_type == EV_REL && ev.type == EV_ABS)) && ev.value != 0) {
                             detected_idx = i;
                             break;
                         }
@@ -503,14 +503,7 @@ void run_server(struct lmnk_config *cfg) {
     int tp_is_same_hw = 0;  // True if mouse and touchpad are the same physical chip
 
     if (cfg->dev_tp[0]) {
-        if (strcmp(cfg->dev_mouse, cfg->dev_tp) == 0) {
-            printf("\n[ERROR] You selected the Touchpad (%s) as the physical MOUSE!\n", cfg->dev_tp);
-            printf("Please select the MOUSE device (e.g. event4) when prompted for Mouse.\n");
-            printf("LMNK will automatically detect the Touchpad (event5) separately.\n");
-            printf("Please run './lmnk config' again and choose the correct Mouse device.\n\n");
-            exit(1);
-        }
-        
+
         tp_fd = open(cfg->dev_tp, O_RDONLY | O_NONBLOCK);
         if (tp_fd >= 0) {
             probe_touchpad_caps(tp_fd, &tp_info);
