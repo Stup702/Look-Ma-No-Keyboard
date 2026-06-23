@@ -14,7 +14,7 @@ LMNK is an ultra-low-latency, hybrid TCP/UDP software KVM built in pure C to be 
 
 ---
 
-## 🛠️ Setup & Installation
+## Setup & Installation
 
 ### 1. Compile the Code
 Compile the project on **both** laptops using GCC:
